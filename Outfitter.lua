@@ -669,20 +669,16 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "VARIABLES_LOADED", Outfitter_VariablesLoaded);
 
 	-- For monitoring mounted, dining and shadowform states
-
 	Outfitter_RegisterEvent(this, "PLAYER_AURAS_CHANGED", Outfitter_UpdateAuraStates);
 
 	-- For monitoring plaguelands and battlegrounds
-
 	Outfitter_RegisterEvent(this, "ZONE_CHANGED_NEW_AREA", Outfitter_UpdateZone);
 
 	-- For monitoring player combat state
-
 	Outfitter_RegisterEvent(this, "PLAYER_REGEN_ENABLED", Outfitter_RegenEnabled);
 	Outfitter_RegisterEvent(this, "PLAYER_REGEN_DISABLED", Outfitter_RegenDisabled);
 
 	-- For monitoring player dead/alive stat
-
 	Outfitter_RegisterEvent(this, "PLAYER_DEAD", Outfitter_PlayerDead);
 	Outfitter_RegisterEvent(this, "PLAYER_ALIVE", Outfitter_PlayerAlive);
 	Outfitter_RegisterEvent(this, "PLAYER_UNGHOST", Outfitter_PlayerAlive);
@@ -690,21 +686,18 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "UNIT_INVENTORY_CHANGED", Outfitter_InventoryChanged);
 
 	-- For indicating which outfits are missing items
-
 	Outfitter_RegisterEvent(this, "BAG_UPDATE", Outfitter_BagUpdate);
 	Outfitter_RegisterEvent(this, "PLAYERBANKSLOTS_CHANGED", Outfitter_BankSlotsChanged);
 
 	-- For monitoring bank bags
-
 	Outfitter_RegisterEvent(this, "BANKFRAME_OPENED", Outfitter_BankFrameOpened);
 	Outfitter_RegisterEvent(this, "BANKFRAME_CLOSED", Outfitter_BankFrameClosed);
 
 	-- For unequipping the dining outfit
-
 	Outfitter_RegisterEvent(this, "UNIT_HEALTH", Outfitter_UnitHealthOrManaChanged);
 	Outfitter_RegisterEvent(this, "UNIT_MANA", Outfitter_UnitHealthOrManaChanged);
 
-	Outfitter_SuspendEvent(this, "UNIT_HEALTH"); -- Don't actually care until the dining outfit equips
+	Outfitter_SuspendEvent(this, "UNIT_HEALTH");
 	Outfitter_SuspendEvent(this, "UNIT_MANA");
 
 	-- For boss/trash outfit
@@ -714,21 +707,20 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "UI_ERROR_MESSAGE", Outfitter_ProfessionCheck);
 	Outfitter_RegisterEvent(this, "LOOT_CLOSED", Outfitter_ProfessionUnequip);
 
-	-- Tabs
+	-- Goblin Brainwasher
+	Outfitter_RegisterEvent(this, "GOSSIP_SHOW", Outfitter_BrainwasherGossipShow);
+	Outfitter_RegisterEvent(this, "GOSSIP_CLOSED", Outfitter_BrainwasherGossipClosed);
 
+	-- Tabs
 	PanelTemplates_SetNumTabs(this, table.getn(gOutfitter_PanelFrames));
 	OutfitterFrame.selectedTab = gOutfitter_CurrentPanel;
 	PanelTemplates_UpdateTabs(this);
 
 	-- Install the /outfit command handler
-
 	SlashCmdList["OUTFITTER"] = Outfitter_ExecuteCommand;
-
 	SLASH_OUTFITTER1 = "/outfitter";
 
-	-- Fake a leaving world event to suspend inventory/bag
-	-- updating until loading is completed
-
+	-- Fake a leaving world event
 	Outfitter_PlayerLeavingWorld();
 end
 
@@ -6981,5 +6973,66 @@ function Outfitter_pfUISkin()
 				skin_checkbox( cb )
 			end
 		end )
+	end
+end
+
+local gOutfitter_PendingBrainwash = nil
+
+function Outfitter_BrainwasherGossipShow()
+	if GossipFrameNpcNameText:GetText() ~= "Goblin Brainwashing Device" then return end
+	for i = 1, NUMGOSSIPBUTTONS do
+		local button = getglobal("GossipTitleButton"..i)
+		if button and button:IsVisible() then
+			local oldOnClick = button:GetScript("OnClick")
+			button:SetScript("OnClick", function()
+				if oldOnClick then oldOnClick() end
+				local _, _, load_spec = string.find(button:GetText(), "Activate (%d+)")
+				if load_spec then
+					gOutfitter_PendingBrainwash = tonumber(load_spec)
+				end
+			end)
+		end
+	end
+end
+
+
+
+function Outfitter_BrainwasherGossipClosed()
+	if gOutfitter_PendingBrainwash then
+		Outfitter_EquipBrainwashOutfit(gOutfitter_PendingBrainwash)
+		gOutfitter_PendingBrainwash = nil
+	end
+end
+
+function Outfitter_EquipBrainwashOutfit(specID)
+	-- First try to use generic names Spec1/Spec2/Spec3
+	local outfit = Outfitter_FindOutfitByName("Spec"..specID)
+	-- Else class-specific names
+	if not outfit then
+		local _, class = UnitClass("player")
+		local classSpecs = {
+			MAGE = { "Arcane", "Fire", "Frost" },
+			WARLOCK = { "Affliction", "Demonology", "Destruction" },
+			PRIEST = { "Discipline", "Holy", "Shadow" },
+			DRUID = { "Balance", "Feral", "Restoration" },
+			ROGUE = { "Assassination", "Combat", "Subtlety" },
+			HUNTER = { "Beast Mastery", "Marksmanship", "Survival" },
+			SHAMAN = { "Elemental", "Enhancement", "Restoration" },
+			PALADIN = { "Holy", "Protection", "Retribution" },
+			WARRIOR = { "Arms", "Fury", "Protection" },
+		}
+
+		if classSpecs[class] and classSpecs[class][specID] then
+			local name = classSpecs[class][specID]
+			outfit = Outfitter_FindOutfitByName(name)
+		end
+	end
+
+	-- Equip if found
+	if outfit then
+		Outfitter_WearOutfit(outfit)
+		DEFAULT_CHAT_FRAME:AddMessage("|cff20c020Outfitter:|r Equipped outfit "..outfit.Name.." (Spec "..specID..")")
+	else
+		DEFAULT_CHAT_FRAME:AddMessage("|cff20c020Outfitter:|r No outfit found for specialization "..specID)
 	end
 end
