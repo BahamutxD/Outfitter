@@ -669,16 +669,20 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "VARIABLES_LOADED", Outfitter_VariablesLoaded);
 
 	-- For monitoring mounted, dining and shadowform states
+
 	Outfitter_RegisterEvent(this, "PLAYER_AURAS_CHANGED", Outfitter_UpdateAuraStates);
 
 	-- For monitoring plaguelands and battlegrounds
+
 	Outfitter_RegisterEvent(this, "ZONE_CHANGED_NEW_AREA", Outfitter_UpdateZone);
 
 	-- For monitoring player combat state
+
 	Outfitter_RegisterEvent(this, "PLAYER_REGEN_ENABLED", Outfitter_RegenEnabled);
 	Outfitter_RegisterEvent(this, "PLAYER_REGEN_DISABLED", Outfitter_RegenDisabled);
 
 	-- For monitoring player dead/alive stat
+
 	Outfitter_RegisterEvent(this, "PLAYER_DEAD", Outfitter_PlayerDead);
 	Outfitter_RegisterEvent(this, "PLAYER_ALIVE", Outfitter_PlayerAlive);
 	Outfitter_RegisterEvent(this, "PLAYER_UNGHOST", Outfitter_PlayerAlive);
@@ -686,18 +690,21 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "UNIT_INVENTORY_CHANGED", Outfitter_InventoryChanged);
 
 	-- For indicating which outfits are missing items
+
 	Outfitter_RegisterEvent(this, "BAG_UPDATE", Outfitter_BagUpdate);
 	Outfitter_RegisterEvent(this, "PLAYERBANKSLOTS_CHANGED", Outfitter_BankSlotsChanged);
 
 	-- For monitoring bank bags
+
 	Outfitter_RegisterEvent(this, "BANKFRAME_OPENED", Outfitter_BankFrameOpened);
 	Outfitter_RegisterEvent(this, "BANKFRAME_CLOSED", Outfitter_BankFrameClosed);
 
 	-- For unequipping the dining outfit
+
 	Outfitter_RegisterEvent(this, "UNIT_HEALTH", Outfitter_UnitHealthOrManaChanged);
 	Outfitter_RegisterEvent(this, "UNIT_MANA", Outfitter_UnitHealthOrManaChanged);
 
-	Outfitter_SuspendEvent(this, "UNIT_HEALTH");
+	Outfitter_SuspendEvent(this, "UNIT_HEALTH"); -- Don't actually care until the dining outfit equips
 	Outfitter_SuspendEvent(this, "UNIT_MANA");
 
 	-- For boss/trash outfit
@@ -707,20 +714,25 @@ function Outfitter_OnLoad()
 	Outfitter_RegisterEvent(this, "UI_ERROR_MESSAGE", Outfitter_ProfessionCheck);
 	Outfitter_RegisterEvent(this, "LOOT_CLOSED", Outfitter_ProfessionUnequip);
 
-	-- Goblin Brainwasher
-	Outfitter_RegisterEvent(this, "GOSSIP_SHOW", Outfitter_BrainwasherGossipShow);
-	Outfitter_RegisterEvent(this, "GOSSIP_CLOSED", Outfitter_BrainwasherGossipClosed);
+	-- For auto-equip complete outfit saved using Goblin Brainwashing Device
+	Outfitter_RegisterEvent(this, "GOSSIP_SHOW", Outfitter_GossipShown);
+	Outfitter_RegisterEvent(this, "GOSSIP_CLOSED", Outfitter_GossipClose);
 
 	-- Tabs
+
 	PanelTemplates_SetNumTabs(this, table.getn(gOutfitter_PanelFrames));
 	OutfitterFrame.selectedTab = gOutfitter_CurrentPanel;
 	PanelTemplates_UpdateTabs(this);
 
 	-- Install the /outfit command handler
+
 	SlashCmdList["OUTFITTER"] = Outfitter_ExecuteCommand;
+
 	SLASH_OUTFITTER1 = "/outfitter";
 
-	-- Fake a leaving world event
+	-- Fake a leaving world event to suspend inventory/bag
+	-- updating until loading is completed
+
 	Outfitter_PlayerLeavingWorld();
 end
 
@@ -964,6 +976,73 @@ function Outfitter_ProfessionCheck(pEvent)
 			gOutfitter_CurrentProfessionOutfit = vOutfit;
 			Outfitter_WearOutfit(gOutfitter_CurrentProfessionOutfit);
 		end
+	end
+end
+
+OUT_washer_choice = nil
+
+OUT_original_GossipTitleButton_OnClick = GossipTitleButton_OnClick
+function OUT_GossipTitleButton_OnClick()
+	if this.type ~= "Available" and this.type ~= "Active" and GossipFrameNpcNameText:GetText() == "Goblin Brainwashing Device" then
+		local action_text = this:GetText()
+		local _,_,save_spec = string.find(action_text,"Save (%d+).. Specialization")
+		local _,_,load_spec = string.find(action_text,"Activate (%d+).. Specialization")
+		if save_spec then
+			OUT_washer_choice = { save = save_spec }
+		elseif load_spec then
+			OUT_washer_choice = { load = load_spec }
+		end
+	end
+	OUT_original_GossipTitleButton_OnClick()
+end
+GossipTitleButton_OnClick = OUT_GossipTitleButton_OnClick
+
+function Outfitter_GossipShown(pEvent)
+	if GossipFrameNpcNameText:GetText() == "Goblin Brainwashing Device" then
+		for i = 1, NUMGOSSIPBUTTONS do
+			local titleButton = getglobal("GossipTitleButton" .. i)
+			if titleButton:IsVisible() then
+				local text = titleButton:GetText();
+				local a1, a2, load_spec, mod, ta1, ta2, ta3 = string.find(text, "Activate (%d+)(..) Specialization *%((%d+)/(%d+)/(%d+)%)")
+				if load_spec then
+					local vOutfit, vCategoryID, vOutfitIndex = Outfitter_FindOutfitByGBD(load_spec);
+					if not vOutfit then
+					else
+						titleButton:SetText(format("Activate %d%s Specialization (%s/%s/%s) - %s", load_spec, mod, ta1, ta2, ta3, vOutfit.Name))
+						GossipResize(titleButton)
+					end
+				end
+			end
+		end
+	end
+end
+
+function Outfitter_GossipClose(pEvent)
+	if OUT_washer_choice then
+		if OUT_washer_choice.save then
+			local set = OUT_washer_choice.save;
+			local equippedNames = "";
+			for vCategoryID, vOutfits in gOutfitter_Settings.Outfits do
+				for vIndex, vOutfit in vOutfits do
+					if Outfitter_WearingOutfit(vOutfit) then
+						if vOutfit.CategoryID == "Complete" then
+							print("saving outfit "..vOutfit.Name.." for this spec");
+							vOutfit.GBD_Set = set;
+						end
+					end
+				end
+			end
+			OUT_washer_choice = nil;
+		elseif OUT_washer_choice.load then
+			local set = OUT_washer_choice.load
+			local vOutfit, vCategoryID, vOutfitIndex = Outfitter_FindOutfitByGBD(set);
+
+			if vOutfit == nil then
+			else
+				Outfitter_WearOutfit(vOutfit,vCategoryID);
+			end
+			OUT_washer_choice = nil;
+		end		
 	end
 end
 
@@ -2617,6 +2696,22 @@ function Outfitter_FindOutfitByName(pName)
 	return nil, nil;
 end
 
+function Outfitter_FindOutfitByGBD(setIndex)
+	if not setIndex then
+		return nil;
+	end
+
+	for vCategoryID, vOutfits in gOutfitter_Settings.Outfits do
+		for vOutfitIndex, vOutfit in vOutfits do
+			if tostring(vOutfit.GBD_Set) == tostring(setIndex) then
+				return vOutfit, vCategoryID, vOutfitIndex;
+			end
+		end
+	end
+
+	return nil, nil;
+end
+
 -- Outfitter doesn't use this function, but other addons such as
 -- Fishing Buddy might use it to locate specific generated outfits
 
@@ -2726,26 +2821,25 @@ function Outfitter_GetEmptyBagSlot(pStartBagIndex, pStartBagSlotIndex, pIncludeB
 	local vStartBagSlotIndex = pStartBagSlotIndex;
 
 	if not vStartBagIndex then
-		vStartBagIndex = NUM_BAG_SLOTS;
+		vStartBagIndex = NUM_BAG_SLOTS; -- Start with last player bag
 	end
 
 	if not vStartBagSlotIndex then
-		vStartBagSlotIndex = 1;
+		vStartBagSlotIndex = 1; -- Start from first slot
 	end
 
 	local vEndBagIndex = 0;
 
 	if pIncludeBank then
-		vEndBagIndex = -1;
+		vEndBagIndex = -1; -- Include bank bags
 	end
 
+	-- We'll search from the specified start position to the end
 	for vBagIndex = vStartBagIndex, vEndBagIndex, -1 do
-		-- Skip the bag if it's a specialty bag (ammo pouch, quiver, shard bag)
-
+		-- Skip specialty bags
 		local vSkipBag = false;
 
 		if vBagIndex > 0 then
-			-- Don't worry about the backpack
 			local vItemLink = GetInventoryItemLink("player", ContainerIDToInventoryID(vBagIndex));
 			local vItemInfo = Outfitter_GetItemInfoFromLink(vItemLink);
 
@@ -2755,13 +2849,21 @@ function Outfitter_GetEmptyBagSlot(pStartBagIndex, pStartBagSlotIndex, pIncludeB
 			end
 		end
 
-		-- Search the bag for empty slots
-
 		if not vSkipBag then
 			local vNumBagSlots = GetContainerNumSlots(vBagIndex);
 
 			if vNumBagSlots > 0 then
-				for vSlotIndex = vStartBagSlotIndex, vNumBagSlots do
+				-- Determine the starting slot for this bag
+				local vSearchStartSlot;
+				if vBagIndex == vStartBagIndex then
+					vSearchStartSlot = vStartBagSlotIndex;
+				else
+					-- For new bags, start from the last slot
+					vSearchStartSlot = vNumBagSlots;
+				end
+				
+				-- Search from the determined start to slot 1
+				for vSlotIndex = vSearchStartSlot, 1, -1 do
 					local vItemInfo = Outfitter_GetBagItemInfo(vBagIndex, vSlotIndex);
 
 					if not vItemInfo then
@@ -2770,8 +2872,9 @@ function Outfitter_GetEmptyBagSlot(pStartBagIndex, pStartBagSlotIndex, pIncludeB
 				end
 			end
 		end
-
-		vStartBagSlotIndex = 1;
+		
+		-- When we move to the next bag, we'll start from its last slot
+		-- This happens automatically in the next loop iteration
 	end
 
 	return nil;
@@ -2780,20 +2883,34 @@ end
 function Outfitter_GetEmptyBagSlotList()
 	local vEmptyBagSlots = {};
 
+	-- Start from the absolute last possible slot
 	local vBagIndex = NUM_BAG_SLOTS;
-	local vBagSlotIndex = 1;
-
+	local vBagSlotIndex = GetContainerNumSlots(vBagIndex) or 1;
+	
 	while true do
 		local vBagSlotInfo = Outfitter_GetEmptyBagSlot(vBagIndex, vBagSlotIndex);
-
+		
 		if not vBagSlotInfo then
+			-- No more empty slots found
+			-- Return the list as-is (it's already in the order we want to use them)
 			return vEmptyBagSlots;
 		end
-
+		
 		table.insert(vEmptyBagSlots, vBagSlotInfo);
-
+		
+		-- Set up to search for the next empty slot
+		-- Continue from the slot before the one we just found
 		vBagIndex = vBagSlotInfo.BagIndex;
-		vBagSlotIndex = vBagSlotInfo.BagSlotIndex + 1;
+		vBagSlotIndex = vBagSlotInfo.BagSlotIndex - 1;
+		
+		-- If we've exhausted this bag, move to previous bag
+		if vBagSlotIndex < 1 then
+			vBagIndex = vBagIndex - 1;
+			if vBagIndex < 0 then
+				return vEmptyBagSlots;
+			end
+			vBagSlotIndex = GetContainerNumSlots(vBagIndex) or 1;
+		end
 	end
 end
 
@@ -6973,66 +7090,5 @@ function Outfitter_pfUISkin()
 				skin_checkbox( cb )
 			end
 		end )
-	end
-end
-
-local gOutfitter_PendingBrainwash = nil
-
-function Outfitter_BrainwasherGossipShow()
-	if GossipFrameNpcNameText:GetText() ~= "Goblin Brainwashing Device" then return end
-	for i = 1, NUMGOSSIPBUTTONS do
-		local button = getglobal("GossipTitleButton"..i)
-		if button and button:IsVisible() then
-			local oldOnClick = button:GetScript("OnClick")
-			button:SetScript("OnClick", function()
-				if oldOnClick then oldOnClick() end
-				local _, _, load_spec = string.find(button:GetText(), "Activate (%d+)")
-				if load_spec then
-					gOutfitter_PendingBrainwash = tonumber(load_spec)
-				end
-			end)
-		end
-	end
-end
-
-
-
-function Outfitter_BrainwasherGossipClosed()
-	if gOutfitter_PendingBrainwash then
-		Outfitter_EquipBrainwashOutfit(gOutfitter_PendingBrainwash)
-		gOutfitter_PendingBrainwash = nil
-	end
-end
-
-function Outfitter_EquipBrainwashOutfit(specID)
-	-- First try to use generic names Spec1/Spec2/Spec3
-	local outfit = Outfitter_FindOutfitByName("Spec"..specID)
-	-- Else class-specific names
-	if not outfit then
-		local _, class = UnitClass("player")
-		local classSpecs = {
-			MAGE = { "Arcane", "Fire", "Frost" },
-			WARLOCK = { "Affliction", "Demonology", "Destruction" },
-			PRIEST = { "Discipline", "Holy", "Shadow" },
-			DRUID = { "Balance", "Feral", "Restoration" },
-			ROGUE = { "Assassination", "Combat", "Subtlety" },
-			HUNTER = { "Beast Mastery", "Marksmanship", "Survival" },
-			SHAMAN = { "Elemental", "Enhancement", "Restoration" },
-			PALADIN = { "Holy", "Protection", "Retribution" },
-			WARRIOR = { "Arms", "Fury", "Protection" },
-		}
-
-		if classSpecs[class] and classSpecs[class][specID] then
-			local name = classSpecs[class][specID]
-			outfit = Outfitter_FindOutfitByName(name)
-		end
-	end
-
-	-- Equip if found
-	if outfit then
-		Outfitter_WearOutfit(outfit)
-		DEFAULT_CHAT_FRAME:AddMessage("|cff20c020Outfitter:|r Equipped outfit "..outfit.Name.." (Spec "..specID..")")
-	else
-		DEFAULT_CHAT_FRAME:AddMessage("|cff20c020Outfitter:|r No outfit found for specialization "..specID)
 	end
 end
